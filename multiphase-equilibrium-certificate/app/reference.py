@@ -7,12 +7,13 @@ from app.validation import EquilibriumValidator
 
 
 class EquilibriumSolver:
-    """Solves non-linear multiphase chemical equilibrium using log-concentration state variables."""
+    """Solves non-linear multiphase chemical equilibrium."""
 
-    def __init__(self, ftol: float = 1e-13, xtol: float = 1e-13, max_nfev: int = 20000):
+    def __init__(self, ftol: float = 1e-13, xtol: float = 1e-13, max_nfev: int = 20000, use_activities: bool = False):
         self.ftol = ftol
         self.xtol = xtol
         self.max_nfev = max_nfev
+        self.use_activities = use_activities
 
     def solve(self, system: ChemicalSystem, initial_guess: Optional[Dict[str, float]] = None) -> Dict[str, float]:
         species_list = list(system.species.keys())
@@ -34,6 +35,7 @@ class EquilibriumSolver:
         def residuals(ln_c: np.ndarray) -> np.ndarray:
             c = np.exp(ln_c)
             concs = {sp: float(c[sp_to_idx[sp]]) for sp in species_list}
+            I = system.calculate_ionic_strength(concs)
             res = []
 
             # 1. Chemical Reaction Equilibrium Residuals
@@ -42,13 +44,13 @@ class EquilibriumSolver:
                     solid_sp = [sp for sp in rxn.stoichiometry if system.species[sp].phase == "solid"]
                     if solid_sp:
                         solid_c = concs.get(solid_sp[0], 0.0)
-                        log_res = rxn.calculate_log_residual(concs)
+                        log_res = rxn.calculate_log_residual(concs, system.species, I, self.use_activities)
                         if solid_c <= 1e-10 and log_res < 0:
                             res.append(0.0)
                             continue
-                res.append(rxn.calculate_log_residual(concs))
+                res.append(rxn.calculate_log_residual(concs, system.species, I, self.use_activities))
 
-            # 2. Elemental Conservation Residuals (weighted heavily to enforce strictly)
+            # 2. Elemental Conservation Residuals
             computed_totals = A_elem @ c
             for i, target in enumerate(b_elem):
                 scale = max(1e-4, abs(target))
@@ -100,6 +102,6 @@ class EquilibriumSolver:
                 continue
 
         if best_sol is None:
-            raise RuntimeError("Equilibrium solver failed to converge to a valid solution.")
+            raise RuntimeError("Equilibrium solver failed to converge.")
 
         return best_sol
